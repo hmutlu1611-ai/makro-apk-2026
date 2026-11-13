@@ -1,0 +1,588 @@
+name: APK derle
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Proje dosyalarini olustur
+        run: |
+          cat > settings.gradle.kts <<'EOF_MK'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "MakroKamera"
+          include(":app")
+          EOF_MK
+          cat > build.gradle.kts <<'EOF_MK'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.0" apply false
+          }
+          EOF_MK
+          cat > gradle.properties <<'EOF_MK'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          EOF_MK
+          mkdir -p app
+          cat > app/build.gradle.kts <<'EOF_MK'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.example.makrokamera"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.example.makrokamera"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+
+          dependencies {
+              val camerax = "1.3.4"
+              implementation("androidx.core:core-ktx:1.13.1")
+              implementation("androidx.activity:activity-ktx:1.9.1")
+              implementation("androidx.camera:camera-core:$camerax")
+              implementation("androidx.camera:camera-camera2:$camerax")
+              implementation("androidx.camera:camera-lifecycle:$camerax")
+              implementation("androidx.camera:camera-view:$camerax")
+          }
+          EOF_MK
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'EOF_MK'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.CAMERA" />
+              <uses-feature
+                  android:name="android.hardware.camera"
+                  android:required="true" />
+              <uses-feature
+                  android:name="android.hardware.camera.autofocus"
+                  android:required="false" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="Makro Kamera"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+
+          </manifest>
+          EOF_MK
+          mkdir -p app/src/main/res/layout
+          cat > app/src/main/res/layout/activity_main.xml <<'EOF_MK'
+          <?xml version="1.0" encoding="utf-8"?>
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="@android:color/black">
+
+              <androidx.camera.view.PreviewView
+                  android:id="@+id/previewView"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent" />
+
+              <!-- Dokunarak odak halkası -->
+              <View
+                  android:id="@+id/focusRing"
+                  android:layout_width="72dp"
+                  android:layout_height="72dp"
+                  android:background="@android:drawable/btn_radio"
+                  android:visibility="gone" />
+
+              <TextView
+                  android:id="@+id/infoText"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_gravity="top|center_horizontal"
+                  android:layout_marginTop="40dp"
+                  android:background="#88000000"
+                  android:paddingHorizontal="12dp"
+                  android:paddingVertical="6dp"
+                  android:textColor="@android:color/white"
+                  android:textSize="14sp" />
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_gravity="bottom"
+                  android:background="#AA000000"
+                  android:orientation="vertical"
+                  android:padding="16dp">
+
+                  <TextView
+                      android:id="@+id/zoomLabel"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="Yakınlaştırma: 1.0x"
+                      android:textColor="@android:color/white" />
+
+                  <SeekBar
+                      android:id="@+id/zoomSeek"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:max="100" />
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:gravity="center_vertical"
+                      android:orientation="horizontal">
+
+                      <Switch
+                          android:id="@+id/manualSwitch"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:text="Manuel odak  "
+                          android:textColor="@android:color/white" />
+
+                      <SeekBar
+                          android:id="@+id/focusSeek"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:enabled="false"
+                          android:max="100" />
+                  </LinearLayout>
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="8dp"
+                      android:gravity="center"
+                      android:orientation="horizontal">
+
+                      <Button
+                          android:id="@+id/switchCameraBtn"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="Kamera" />
+
+                      <Button
+                          android:id="@+id/captureBtn"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1.4"
+                          android:text="ÇEK" />
+
+                      <Button
+                          android:id="@+id/torchBtn"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="Işık" />
+                  </LinearLayout>
+              </LinearLayout>
+          </FrameLayout>
+          EOF_MK
+          mkdir -p app/src/main/java/com/example/makrokamera
+          cat > app/src/main/java/com/example/makrokamera/MainActivity.kt <<'EOF_MK'
+          package com.example.makrokamera
+
+          import android.Manifest
+          import android.content.ContentValues
+          import android.content.pm.PackageManager
+          import android.hardware.camera2.CameraCharacteristics
+          import android.hardware.camera2.CaptureRequest
+          import android.os.Bundle
+          import android.provider.MediaStore
+          import android.view.MotionEvent
+          import android.view.ScaleGestureDetector
+          import android.view.View
+          import android.widget.Button
+          import android.widget.SeekBar
+          import android.widget.Switch
+          import android.widget.TextView
+          import android.widget.Toast
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.activity.ComponentActivity
+          import androidx.camera.camera2.interop.Camera2CameraControl
+          import androidx.camera.camera2.interop.Camera2CameraInfo
+          import androidx.camera.camera2.interop.Camera2Interop
+          import androidx.camera.camera2.interop.CaptureRequestOptions
+          import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+          import androidx.camera.core.Camera
+          import androidx.camera.core.CameraInfo
+          import androidx.camera.core.CameraSelector
+          import androidx.camera.core.FocusMeteringAction
+          import androidx.camera.core.ImageCapture
+          import androidx.camera.core.ImageCaptureException
+          import androidx.camera.core.Preview
+          import androidx.camera.lifecycle.ProcessCameraProvider
+          import androidx.camera.view.PreviewView
+          import androidx.core.content.ContextCompat
+          import java.text.SimpleDateFormat
+          import java.util.Locale
+          import java.util.concurrent.TimeUnit
+
+          @OptIn(ExperimentalCamera2Interop::class)
+          class MainActivity : ComponentActivity() {
+
+              private lateinit var previewView: PreviewView
+              private lateinit var focusRing: View
+              private lateinit var infoText: TextView
+              private lateinit var zoomLabel: TextView
+              private lateinit var zoomSeek: SeekBar
+              private lateinit var focusSeek: SeekBar
+              private lateinit var manualSwitch: Switch
+
+              private var provider: ProcessCameraProvider? = null
+              private var camera: Camera? = null
+              private var imageCapture: ImageCapture? = null
+
+              /** Arka kameralar; en yakın odaklanabilen (makro için en uygun) başta. */
+              private var backCameraIds: List<String> = emptyList()
+              private var currentIndex = 0
+              private var torchOn = false
+
+              // Mevcut kameranın en yakın odak mesafesi (diyoptri). Büyük değer = daha yakına odaklanır.
+              private var minFocusDiopter = 0f
+
+              // Dijital büyütmede görüntü bozulmasın diye üst sınır (optik/sensör kırpma).
+              private val maxQualityZoom = 5f
+
+              private val permLauncher =
+                  registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+                      if (ok) startCamera() else {
+                          Toast.makeText(this, "Kamera izni gerekli", Toast.LENGTH_LONG).show()
+                          finish()
+                      }
+                  }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+
+                  previewView = findViewById(R.id.previewView)
+                  focusRing = findViewById(R.id.focusRing)
+                  infoText = findViewById(R.id.infoText)
+                  zoomLabel = findViewById(R.id.zoomLabel)
+                  zoomSeek = findViewById(R.id.zoomSeek)
+                  focusSeek = findViewById(R.id.focusSeek)
+                  manualSwitch = findViewById(R.id.manualSwitch)
+
+                  previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                  previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+
+                  setupGestures()
+                  setupControls()
+
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                      == PackageManager.PERMISSION_GRANTED
+                  ) startCamera() else permLauncher.launch(Manifest.permission.CAMERA)
+              }
+
+              // ---------------------------------------------------------------- kamera
+
+              private fun startCamera() {
+                  val future = ProcessCameraProvider.getInstance(this)
+                  future.addListener({
+                      provider = future.get()
+                      backCameraIds = rankBackCameras(provider!!)
+                      if (backCameraIds.isEmpty()) {
+                          Toast.makeText(this, "Arka kamera bulunamadı", Toast.LENGTH_LONG).show()
+                          return@addListener
+                      }
+                      currentIndex = 0 // en iyi makro adayı
+                      bindCamera()
+                  }, ContextCompat.getMainExecutor(this))
+              }
+
+              /** Arka kameraları minimum odak mesafesine göre sıralar (en yakına odaklanan ilk). */
+              private fun rankBackCameras(p: ProcessCameraProvider): List<String> {
+                  return p.availableCameraInfos
+                      .filter {
+                          Camera2CameraInfo.from(it).getCameraCharacteristic(
+                              CameraCharacteristics.LENS_FACING
+                          ) == CameraCharacteristics.LENS_FACING_BACK
+                      }
+                      .map {
+                          val c2 = Camera2CameraInfo.from(it)
+                          val diopter = c2.getCameraCharacteristic(
+                              CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE
+                          ) ?: 0f
+                          c2.cameraId to diopter
+                      }
+                      .sortedByDescending { it.second }
+                      .map { it.first }
+              }
+
+              private fun bindCamera() {
+                  val p = provider ?: return
+                  val id = backCameraIds[currentIndex]
+
+                  val selector = CameraSelector.Builder()
+                      .addCameraFilter { infos: List<CameraInfo> ->
+                          infos.filter { Camera2CameraInfo.from(it).cameraId == id }
+                      }.build()
+
+                  // Sürekli otomatik netleme + yüksek kalite kenar/gürültü işleme + optik sabitleme
+                  val previewBuilder = Preview.Builder()
+                  Camera2Interop.Extender(previewBuilder).apply {
+                      setCaptureRequestOption(
+                          CaptureRequest.CONTROL_AF_MODE,
+                          CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                      )
+                      setCaptureRequestOption(
+                          CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                          CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                      )
+                      setCaptureRequestOption(
+                          CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY
+                      )
+                      setCaptureRequestOption(
+                          CaptureRequest.NOISE_REDUCTION_MODE,
+                          CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+                      )
+                  }
+                  val preview = previewBuilder.build().also {
+                      it.setSurfaceProvider(previewView.surfaceProvider)
+                  }
+
+                  val captureBuilder = ImageCapture.Builder()
+                      .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                      .setJpegQuality(98)
+                  Camera2Interop.Extender(captureBuilder).apply {
+                      setCaptureRequestOption(
+                          CaptureRequest.CONTROL_AF_MODE,
+                          CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                      )
+                      setCaptureRequestOption(
+                          CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY
+                      )
+                      setCaptureRequestOption(
+                          CaptureRequest.NOISE_REDUCTION_MODE,
+                          CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+                      )
+                  }
+                  imageCapture = captureBuilder.build()
+
+                  p.unbindAll()
+                  camera = p.bindToLifecycle(this, selector, preview, imageCapture)
+
+                  val cam = camera!!
+                  minFocusDiopter = Camera2CameraInfo.from(cam.cameraInfo).getCameraCharacteristic(
+                      CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE
+                  ) ?: 0f
+
+                  cam.cameraInfo.zoomState.observe(this) { z ->
+                      val limit = minOf(z.maxZoomRatio, maxQualityZoom)
+                      val range = (limit - z.minZoomRatio).coerceAtLeast(0.01f)
+                      zoomSeek.progress = (((z.zoomRatio - z.minZoomRatio) / range) * 100).toInt()
+                      zoomLabel.text = "Yakınlaştırma: %.1fx (maks %.1fx)".format(Locale.US, z.zoomRatio, limit)
+                  }
+
+                  manualSwitch.isChecked = false
+                  focusSeek.isEnabled = false
+                  torchOn = false
+
+                  val closest = if (minFocusDiopter > 0f) (100f / minFocusDiopter) else Float.NaN
+                  infoText.text = "Kamera ${currentIndex + 1}/${backCameraIds.size}" +
+                      if (closest.isNaN()) " • sabit odak" else " • en yakın odak ≈ %.1f cm".format(Locale.US, closest)
+              }
+
+              // ---------------------------------------------------------------- kontroller
+
+              private fun setupControls() {
+                  zoomSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                          if (!fromUser) return
+                          val z = camera?.cameraInfo?.zoomState?.value ?: return
+                          val limit = minOf(z.maxZoomRatio, maxQualityZoom)
+                          camera?.cameraControl?.setZoomRatio(z.minZoomRatio + (limit - z.minZoomRatio) * p / 100f)
+                      }
+                      override fun onStartTrackingTouch(s: SeekBar?) {}
+                      override fun onStopTrackingTouch(s: SeekBar?) {}
+                  })
+
+                  manualSwitch.setOnCheckedChangeListener { _, checked ->
+                      focusSeek.isEnabled = checked && minFocusDiopter > 0f
+                      if (checked) applyManualFocus(focusSeek.progress) else restoreAutoFocus()
+                  }
+
+                  focusSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                          if (fromUser && manualSwitch.isChecked) applyManualFocus(p)
+                      }
+                      override fun onStartTrackingTouch(s: SeekBar?) {}
+                      override fun onStopTrackingTouch(s: SeekBar?) {}
+                  })
+
+                  findViewById<Button>(R.id.switchCameraBtn).setOnClickListener {
+                      if (backCameraIds.size > 1) {
+                          currentIndex = (currentIndex + 1) % backCameraIds.size
+                          bindCamera()
+                      } else Toast.makeText(this, "Tek arka kamera var", Toast.LENGTH_SHORT).show()
+                  }
+
+                  findViewById<Button>(R.id.torchBtn).setOnClickListener {
+                      val cam = camera ?: return@setOnClickListener
+                      if (!cam.cameraInfo.hasFlashUnit()) return@setOnClickListener
+                      torchOn = !torchOn
+                      cam.cameraControl.enableTorch(torchOn)
+                  }
+
+                  findViewById<Button>(R.id.captureBtn).setOnClickListener { takePhoto() }
+              }
+
+              /** İlerleme 0 = sonsuz, 100 = en yakın odak. */
+              private fun applyManualFocus(progress: Int) {
+                  val cam = camera ?: return
+                  if (minFocusDiopter <= 0f) return
+                  val diopter = minFocusDiopter * progress / 100f
+                  Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(
+                      CaptureRequestOptions.Builder()
+                          .setCaptureRequestOption(
+                              CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF
+                          )
+                          .setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, diopter)
+                          .build()
+                  )
+              }
+
+              private fun restoreAutoFocus() {
+                  val cam = camera ?: return
+                  Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(
+                      CaptureRequestOptions.Builder()
+                          .setCaptureRequestOption(
+                              CaptureRequest.CONTROL_AF_MODE,
+                              CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                          )
+                          .build()
+                  )
+              }
+
+              // ---------------------------------------------------------------- dokunma + tutam
+
+              private fun setupGestures() {
+                  val scaleDetector = ScaleGestureDetector(this,
+                      object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                          override fun onScale(d: ScaleGestureDetector): Boolean {
+                              val z = camera?.cameraInfo?.zoomState?.value ?: return true
+                              val limit = minOf(z.maxZoomRatio, maxQualityZoom)
+                              val target = (z.zoomRatio * d.scaleFactor).coerceIn(z.minZoomRatio, limit)
+                              camera?.cameraControl?.setZoomRatio(target)
+                              return true
+                          }
+                      })
+
+                  previewView.setOnTouchListener { v, e ->
+                      scaleDetector.onTouchEvent(e)
+                      if (e.action == MotionEvent.ACTION_UP && e.pointerCount == 1 &&
+                          !scaleDetector.isInProgress && e.eventTime - e.downTime < 300
+                      ) {
+                          tapToFocus(e.x, e.y)
+                          v.performClick()
+                      }
+                      true
+                  }
+              }
+
+              private fun tapToFocus(x: Float, y: Float) {
+                  val cam = camera ?: return
+                  if (manualSwitch.isChecked) manualSwitch.isChecked = false
+
+                  val point = previewView.meteringPointFactory.createPoint(x, y)
+                  val action = FocusMeteringAction.Builder(
+                      point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
+                  ).setAutoCancelDuration(4, TimeUnit.SECONDS).build()
+                  cam.cameraControl.startFocusAndMetering(action)
+
+                  focusRing.x = x - focusRing.width / 2f
+                  focusRing.y = y - focusRing.height / 2f
+                  focusRing.visibility = View.VISIBLE
+                  focusRing.postDelayed({ focusRing.visibility = View.GONE }, 900)
+              }
+
+              // ---------------------------------------------------------------- çekim
+
+              private fun takePhoto() {
+                  val capture = imageCapture ?: return
+                  val name = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
+                  val values = ContentValues().apply {
+                      put(MediaStore.MediaColumns.DISPLAY_NAME, "MAKRO_$name.jpg")
+                      put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                      put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/MakroKamera")
+                  }
+                  val options = ImageCapture.OutputFileOptions.Builder(
+                      contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
+                  ).build()
+
+                  capture.takePicture(options, ContextCompat.getMainExecutor(this),
+                      object : ImageCapture.OnImageSavedCallback {
+                          override fun onImageSaved(r: ImageCapture.OutputFileResults) {
+                              Toast.makeText(this@MainActivity, "Kaydedildi: Pictures/MakroKamera", Toast.LENGTH_SHORT).show()
+                          }
+                          override fun onError(e: ImageCaptureException) {
+                              Toast.makeText(this@MainActivity, "Hata: ${e.message}", Toast.LENGTH_LONG).show()
+                          }
+                      })
+              }
+          }
+          EOF_MK
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Debug APK derle
+        run: gradle assembleDebug --no-daemon --console=plain
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MakroKamera-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
