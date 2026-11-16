@@ -1,4 +1,4 @@
-name: APK derle
+APK derle
 
 on:
   push:
@@ -208,6 +208,13 @@ jobs:
                           android:text="Kamera" />
 
                       <Button
+                          android:id="@+id/macroBtn"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="Makro" />
+
+                      <Button
                           android:id="@+id/captureBtn"
                           android:layout_width="0dp"
                           android:layout_height="wrap_content"
@@ -234,6 +241,8 @@ jobs:
           import android.hardware.camera2.CameraCharacteristics
           import android.hardware.camera2.CaptureRequest
           import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
           import android.provider.MediaStore
           import android.view.MotionEvent
           import android.view.ScaleGestureDetector
@@ -257,6 +266,8 @@ jobs:
           import androidx.camera.core.ImageCapture
           import androidx.camera.core.ImageCaptureException
           import androidx.camera.core.Preview
+          import androidx.camera.core.resolutionselector.ResolutionSelector
+          import androidx.camera.core.resolutionselector.ResolutionStrategy
           import androidx.camera.lifecycle.ProcessCameraProvider
           import androidx.camera.view.PreviewView
           import androidx.core.content.ContextCompat
@@ -288,7 +299,14 @@ jobs:
               private var minFocusDiopter = 0f
 
               // Dijital büyütmede görüntü bozulmasın diye üst sınır (optik/sensör kırpma).
-              private val maxQualityZoom = 5f
+              // Kaydırıcı ve iki parmakla yakınlaştırma bu değere kadar çıkar (telefon izin verdiği kadar).
+              private val maxQualityZoom = 10f
+
+              // Bu değerin üstünde büyütme dijitaldir; ayrıntı kaybı başlar ve ekranda uyarı çıkar.
+              private val sharpZoomLimit = 3f
+
+              private val handler = Handler(Looper.getMainLooper())
+              private val refocusRunnable = Runnable { focusCenter() }
 
               private val permLauncher =
                   registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
@@ -390,7 +408,12 @@ jobs:
 
                   val captureBuilder = ImageCapture.Builder()
                       .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                      .setJpegQuality(98)
+                      .setJpegQuality(100)
+                      .setResolutionSelector(
+                          ResolutionSelector.Builder()
+                              .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                              .build()
+                      )
                   Camera2Interop.Extender(captureBuilder).apply {
                       setCaptureRequestOption(
                           CaptureRequest.CONTROL_AF_MODE,
@@ -418,7 +441,8 @@ jobs:
                       val limit = minOf(z.maxZoomRatio, maxQualityZoom)
                       val range = (limit - z.minZoomRatio).coerceAtLeast(0.01f)
                       zoomSeek.progress = (((z.zoomRatio - z.minZoomRatio) / range) * 100).toInt()
-                      zoomLabel.text = "Yakınlaştırma: %.1fx (maks %.1fx)".format(Locale.US, z.zoomRatio, limit)
+                      val warn = if (z.zoomRatio > sharpZoomLimit) "  ⚠ dijital: ayrıntı azalır" else ""
+                      zoomLabel.text = "Yakınlaştırma: %.1fx (maks %.1fx)%s".format(Locale.US, z.zoomRatio, limit, warn)
                   }
 
                   manualSwitch.isChecked = false
@@ -428,6 +452,7 @@ jobs:
                   val closest = if (minFocusDiopter > 0f) (100f / minFocusDiopter) else Float.NaN
                   infoText.text = "Kamera ${currentIndex + 1}/${backCameraIds.size}" +
                       if (closest.isNaN()) " • sabit odak" else " • en yakın odak ≈ %.1f cm".format(Locale.US, closest)
+                  scheduleRefocus()
               }
 
               // ---------------------------------------------------------------- kontroller
@@ -441,7 +466,7 @@ jobs:
                           camera?.cameraControl?.setZoomRatio(z.minZoomRatio + (limit - z.minZoomRatio) * p / 100f)
                       }
                       override fun onStartTrackingTouch(s: SeekBar?) {}
-                      override fun onStopTrackingTouch(s: SeekBar?) {}
+                      override fun onStopTrackingTouch(s: SeekBar?) { scheduleRefocus() }
                   })
 
                   manualSwitch.setOnCheckedChangeListener { _, checked ->
@@ -471,10 +496,42 @@ jobs:
                       cam.cameraControl.enableTorch(torchOn)
                   }
 
+                  findViewById<Button>(R.id.macroBtn).setOnClickListener {
+                      val z = camera?.cameraInfo?.zoomState?.value ?: return@setOnClickListener
+                      if (manualSwitch.isChecked) manualSwitch.isChecked = false
+                      camera?.cameraControl?.setZoomRatio(z.minZoomRatio)
+                      scheduleRefocus()
+                      val msg = if (z.minZoomRatio < 1f)
+                          "Makro: en geniş mercek devrede. Nesneye 2-5 cm yaklaşın."
+                      else
+                          "Bu telefonda ayrı makro mercek görünmüyor. Nesneye yaklaşıp odaklanmasını bekleyin."
+                      Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                  }
+
                   findViewById<Button>(R.id.captureBtn).setOnClickListener { takePhoto() }
               }
 
               /** İlerleme 0 = sonsuz, 100 = en yakın odak. */
+              /** Ekranın ortasına otomatik netleme tetikler; 3 sn sonra sürekli otomatik odağa döner. */
+              private fun focusCenter() {
+                  val cam = camera ?: return
+                  if (manualSwitch.isChecked) return
+                  if (previewView.width == 0 || previewView.height == 0) return
+                  val point = previewView.meteringPointFactory.createPoint(
+                      previewView.width / 2f, previewView.height / 2f
+                  )
+                  val action = FocusMeteringAction.Builder(
+                      point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
+                  ).setAutoCancelDuration(3, TimeUnit.SECONDS).build()
+                  cam.cameraControl.startFocusAndMetering(action)
+              }
+
+              /** Yakınlaştırma durunca yarım saniye sonra yeniden netler. */
+              private fun scheduleRefocus() {
+                  handler.removeCallbacks(refocusRunnable)
+                  handler.postDelayed(refocusRunnable, 500)
+              }
+
               private fun applyManualFocus(progress: Int) {
                   val cam = camera ?: return
                   if (minFocusDiopter <= 0f) return
@@ -512,6 +569,10 @@ jobs:
                               val target = (z.zoomRatio * d.scaleFactor).coerceIn(z.minZoomRatio, limit)
                               camera?.cameraControl?.setZoomRatio(target)
                               return true
+                          }
+
+                          override fun onScaleEnd(d: ScaleGestureDetector) {
+                              scheduleRefocus()
                           }
                       })
 
@@ -586,3 +647,4 @@ jobs:
         with:
           name: MakroKamera-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+
