@@ -102,6 +102,7 @@ jobs:
 
               <application
                   android:allowBackup="true"
+                  android:largeHeap="true"
                   android:label="Makro Kamera"
                   android:theme="@android:style/Theme.Material.NoActionBar">
                   <activity
@@ -130,7 +131,6 @@ jobs:
                   android:layout_width="match_parent"
                   android:layout_height="match_parent" />
 
-              <!-- Dokunarak odak halkası -->
               <View
                   android:id="@+id/focusRing"
                   android:layout_width="72dp"
@@ -158,18 +158,36 @@ jobs:
                   android:orientation="vertical"
                   android:padding="16dp">
 
-                  <TextView
-                      android:id="@+id/zoomLabel"
-                      android:layout_width="wrap_content"
-                      android:layout_height="wrap_content"
-                      android:text="Yakınlaştırma: 1.0x"
-                      android:textColor="@android:color/white" />
-
-                  <SeekBar
-                      android:id="@+id/zoomSeek"
+                  <LinearLayout
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:max="100" />
+                      android:gravity="center_vertical"
+                      android:orientation="horizontal">
+
+                      <Button
+                          android:id="@+id/zoomOutBtn"
+                          android:layout_width="64dp"
+                          android:layout_height="wrap_content"
+                          android:text="-"
+                          android:textSize="22sp" />
+
+                      <TextView
+                          android:id="@+id/zoomLabel"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:gravity="center"
+                          android:text="1.0x"
+                          android:textColor="@android:color/white"
+                          android:textSize="15sp" />
+
+                      <Button
+                          android:id="@+id/zoomInBtn"
+                          android:layout_width="64dp"
+                          android:layout_height="wrap_content"
+                          android:text="+"
+                          android:textSize="22sp" />
+                  </LinearLayout>
 
                   <LinearLayout
                       android:layout_width="match_parent"
@@ -205,29 +223,39 @@ jobs:
                           android:layout_width="0dp"
                           android:layout_height="wrap_content"
                           android:layout_weight="1"
-                          android:text="Kamera" />
+                          android:text="Kamera"
+                          android:textSize="12sp" />
 
                       <Button
                           android:id="@+id/macroBtn"
                           android:layout_width="0dp"
                           android:layout_height="wrap_content"
                           android:layout_weight="1"
-                          android:text="Makro" />
+                          android:text="Makro"
+                          android:textSize="12sp" />
 
                       <Button
-                          android:id="@+id/captureBtn"
+                          android:id="@+id/negativeBtn"
                           android:layout_width="0dp"
                           android:layout_height="wrap_content"
-                          android:layout_weight="1.4"
-                          android:text="ÇEK" />
+                          android:layout_weight="1"
+                          android:text="Negatif"
+                          android:textSize="12sp" />
 
                       <Button
                           android:id="@+id/torchBtn"
                           android:layout_width="0dp"
                           android:layout_height="wrap_content"
                           android:layout_weight="1"
-                          android:text="Işık" />
+                          android:text="Işık"
+                          android:textSize="12sp" />
                   </LinearLayout>
+
+                  <Button
+                      android:id="@+id/captureBtn"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="ÇEK" />
               </LinearLayout>
           </FrameLayout>
           EOF_MK
@@ -238,15 +266,27 @@ jobs:
           import android.Manifest
           import android.content.ContentValues
           import android.content.pm.PackageManager
+          import android.graphics.Bitmap
+          import android.graphics.BitmapFactory
+          import android.graphics.Canvas
+          import android.graphics.ColorMatrix
+          import android.graphics.ColorMatrixColorFilter
+          import android.graphics.Matrix
+          import android.graphics.Paint
           import android.hardware.camera2.CameraCharacteristics
           import android.hardware.camera2.CaptureRequest
+          import android.media.ExifInterface
+          import android.net.Uri
+          import android.os.Build
           import android.os.Bundle
           import android.os.Handler
           import android.os.Looper
           import android.provider.MediaStore
           import android.view.MotionEvent
           import android.view.ScaleGestureDetector
+          import android.view.TextureView
           import android.view.View
+          import android.view.ViewGroup
           import android.widget.Button
           import android.widget.SeekBar
           import android.widget.Switch
@@ -282,25 +322,26 @@ jobs:
               private lateinit var focusRing: View
               private lateinit var infoText: TextView
               private lateinit var zoomLabel: TextView
-              private lateinit var zoomSeek: SeekBar
               private lateinit var focusSeek: SeekBar
               private lateinit var manualSwitch: Switch
+              private lateinit var negativeBtn: Button
 
               private var provider: ProcessCameraProvider? = null
               private var camera: Camera? = null
               private var imageCapture: ImageCapture? = null
 
-              /** Arka kameralar; en yakın odaklanabilen (makro için en uygun) başta. */
               private var backCameraIds: List<String> = emptyList()
               private var currentIndex = 0
               private var torchOn = false
+              private var negative = false
 
-              // Mevcut kameranın en yakın odak mesafesi (diyoptri). Büyük değer = daha yakına odaklanır.
               private var minFocusDiopter = 0f
 
-              // Dijital büyütmede görüntü bozulmasın diye üst sınır (optik/sensör kırpma).
-              // Kaydırıcı ve iki parmakla yakınlaştırma bu değere kadar çıkar (telefon izin verdiği kadar).
-              private val maxQualityZoom = 10f
+              // + ve - düğmelerinin geçeceği büyütme basamakları (telefonun desteklediği üst sınıra kadar).
+              private val zoomSteps = listOf(1f, 2f, 3f, 5f, 10f, 15f, 20f, 25f, 30f, 35f, 40f, 45f, 50f)
+
+              // İki parmakla yakınlaştırma için üst sınır.
+              private val maxQualityZoom = 50f
 
               // Bu değerin üstünde büyütme dijitaldir; ayrıntı kaybı başlar ve ekranda uyarı çıkar.
               private val sharpZoomLimit = 3f
@@ -324,9 +365,9 @@ jobs:
                   focusRing = findViewById(R.id.focusRing)
                   infoText = findViewById(R.id.infoText)
                   zoomLabel = findViewById(R.id.zoomLabel)
-                  zoomSeek = findViewById(R.id.zoomSeek)
                   focusSeek = findViewById(R.id.focusSeek)
                   manualSwitch = findViewById(R.id.manualSwitch)
+                  negativeBtn = findViewById(R.id.negativeBtn)
 
                   previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                   previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
@@ -339,8 +380,6 @@ jobs:
                   ) startCamera() else permLauncher.launch(Manifest.permission.CAMERA)
               }
 
-              // ---------------------------------------------------------------- kamera
-
               private fun startCamera() {
                   val future = ProcessCameraProvider.getInstance(this)
                   future.addListener({
@@ -350,12 +389,11 @@ jobs:
                           Toast.makeText(this, "Arka kamera bulunamadı", Toast.LENGTH_LONG).show()
                           return@addListener
                       }
-                      currentIndex = 0 // en iyi makro adayı
+                      currentIndex = 0
                       bindCamera()
                   }, ContextCompat.getMainExecutor(this))
               }
 
-              /** Arka kameraları minimum odak mesafesine göre sıralar (en yakına odaklanan ilk). */
               private fun rankBackCameras(p: ProcessCameraProvider): List<String> {
                   return p.availableCameraInfos
                       .filter {
@@ -383,7 +421,6 @@ jobs:
                           infos.filter { Camera2CameraInfo.from(it).cameraId == id }
                       }.build()
 
-                  // Sürekli otomatik netleme + yüksek kalite kenar/gürültü işleme + optik sabitleme
                   val previewBuilder = Preview.Builder()
                   Camera2Interop.Extender(previewBuilder).apply {
                       setCaptureRequestOption(
@@ -438,11 +475,10 @@ jobs:
                   ) ?: 0f
 
                   cam.cameraInfo.zoomState.observe(this) { z ->
-                      val limit = minOf(z.maxZoomRatio, maxQualityZoom)
-                      val range = (limit - z.minZoomRatio).coerceAtLeast(0.01f)
-                      zoomSeek.progress = (((z.zoomRatio - z.minZoomRatio) / range) * 100).toInt()
-                      val warn = if (z.zoomRatio > sharpZoomLimit) "  ⚠ dijital: ayrıntı azalır" else ""
-                      zoomLabel.text = "Yakınlaştırma: %.1fx (maks %.1fx)%s".format(Locale.US, z.zoomRatio, limit, warn)
+                      val warn = if (z.zoomRatio > sharpZoomLimit) "  ⚠ dijital" else ""
+                      zoomLabel.text = "%.1fx (telefon maks %.1fx)%s".format(
+                          Locale.US, z.zoomRatio, z.maxZoomRatio, warn
+                      )
                   }
 
                   manualSwitch.isChecked = false
@@ -453,21 +489,14 @@ jobs:
                   infoText.text = "Kamera ${currentIndex + 1}/${backCameraIds.size}" +
                       if (closest.isNaN()) " • sabit odak" else " • en yakın odak ≈ %.1f cm".format(Locale.US, closest)
                   scheduleRefocus()
+
+                  // Önizleme görünümü yeniden oluşabilir; negatif filtreyi biraz sonra tekrar uygula.
+                  previewView.postDelayed({ applyNegative() }, 600)
               }
 
-              // ---------------------------------------------------------------- kontroller
-
               private fun setupControls() {
-                  zoomSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                      override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                          if (!fromUser) return
-                          val z = camera?.cameraInfo?.zoomState?.value ?: return
-                          val limit = minOf(z.maxZoomRatio, maxQualityZoom)
-                          camera?.cameraControl?.setZoomRatio(z.minZoomRatio + (limit - z.minZoomRatio) * p / 100f)
-                      }
-                      override fun onStartTrackingTouch(s: SeekBar?) {}
-                      override fun onStopTrackingTouch(s: SeekBar?) { scheduleRefocus() }
-                  })
+                  findViewById<Button>(R.id.zoomInBtn).setOnClickListener { stepZoom(true) }
+                  findViewById<Button>(R.id.zoomOutBtn).setOnClickListener { stepZoom(false) }
 
                   manualSwitch.setOnCheckedChangeListener { _, checked ->
                       focusSeek.isEnabled = checked && minFocusDiopter > 0f
@@ -508,10 +537,145 @@ jobs:
                       Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                   }
 
+                  negativeBtn.setOnClickListener {
+                      negative = !negative
+                      negativeBtn.text = if (negative) "Negatif ✓" else "Negatif"
+                      applyNegative()
+                  }
+
                   findViewById<Button>(R.id.captureBtn).setOnClickListener { takePhoto() }
               }
 
-              /** İlerleme 0 = sonsuz, 100 = en yakın odak. */
+              /** + / - düğmeleri: 1, 2, 3, 5, 10, 15 ... 50x basamaklarında geçiş yapar. */
+              private fun stepZoom(up: Boolean) {
+                  val z = camera?.cameraInfo?.zoomState?.value ?: return
+                  val cur = z.zoomRatio
+                  val target = if (up) {
+                      zoomSteps.firstOrNull { it > cur + 0.01f } ?: zoomSteps.last()
+                  } else {
+                      zoomSteps.lastOrNull { it < cur - 0.01f } ?: z.minZoomRatio
+                  }
+                  val clamped = target.coerceIn(z.minZoomRatio, z.maxZoomRatio)
+                  if (up && clamped <= cur + 0.01f) {
+                      Toast.makeText(
+                          this,
+                          "Bu telefon en fazla %.1fx büyütme destekliyor.".format(Locale.US, z.maxZoomRatio),
+                          Toast.LENGTH_SHORT
+                      ).show()
+                      return
+                  }
+                  camera?.cameraControl?.setZoomRatio(clamped)
+                  scheduleRefocus()
+              }
+
+              // ---------------------------------------------------------------- negatif görüntü
+
+              private fun negativeFilter(): ColorMatrixColorFilter {
+                  val m = ColorMatrix(
+                      floatArrayOf(
+                          -1f, 0f, 0f, 0f, 255f,
+                          0f, -1f, 0f, 0f, 255f,
+                          0f, 0f, -1f, 0f, 255f,
+                          0f, 0f, 0f, 1f, 0f
+                      )
+                  )
+                  return ColorMatrixColorFilter(m)
+              }
+
+              private fun findTextureView(v: View): TextureView? {
+                  if (v is TextureView) return v
+                  if (v is ViewGroup) {
+                      for (i in 0 until v.childCount) {
+                          val found = findTextureView(v.getChildAt(i))
+                          if (found != null) return found
+                      }
+                  }
+                  return null
+              }
+
+              private fun applyNegative() {
+                  val tv = findTextureView(previewView)
+                  val target: View = tv ?: previewView
+                  if (tv != null) previewView.setLayerType(View.LAYER_TYPE_NONE, null)
+                  if (negative) {
+                      val paint = Paint()
+                      paint.colorFilter = negativeFilter()
+                      target.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
+                  } else {
+                      target.setLayerType(View.LAYER_TYPE_NONE, null)
+                  }
+              }
+
+              /** Negatif açıkken çekilen fotoğrafın, ters çevrilmiş bir kopyasını da kaydeder. */
+              private fun saveNegativeCopy(uri: Uri) {
+                  Thread {
+                      try {
+                          val bounds = BitmapFactory.Options()
+                          bounds.inJustDecodeBounds = true
+                          contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                          var sample = 1
+                          while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 4096) sample *= 2
+                          val opts = BitmapFactory.Options()
+                          opts.inSampleSize = sample
+                          val src = contentResolver.openInputStream(uri)?.use {
+                              BitmapFactory.decodeStream(it, null, opts)
+                          } ?: return@Thread
+
+                          var degrees = 0
+                          contentResolver.openInputStream(uri)?.use {
+                              val exif = ExifInterface(it)
+                              val o = exif.getAttributeInt(
+                                  ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL
+                              )
+                              degrees = when (o) {
+                                  ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                                  ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                                  ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                                  else -> 0
+                              }
+                          }
+
+                          val upright = if (degrees != 0) {
+                              val matrix = Matrix()
+                              matrix.postRotate(degrees.toFloat())
+                              val r = Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
+                              src.recycle()
+                              r
+                          } else src
+
+                          val out = Bitmap.createBitmap(upright.width, upright.height, Bitmap.Config.ARGB_8888)
+                          val paint = Paint()
+                          paint.colorFilter = negativeFilter()
+                          Canvas(out).drawBitmap(upright, 0f, 0f, paint)
+                          upright.recycle()
+
+                          val name = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
+                          val values = ContentValues()
+                          values.put(MediaStore.MediaColumns.DISPLAY_NAME, "MAKRO_NEG_$name.jpg")
+                          values.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                          if (Build.VERSION.SDK_INT >= 29) {
+                              values.put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/MakroKamera")
+                          }
+                          val outUri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                          if (outUri != null) {
+                              contentResolver.openOutputStream(outUri)?.use {
+                                  out.compress(Bitmap.CompressFormat.JPEG, 100, it)
+                              }
+                          }
+                          out.recycle()
+                          runOnUiThread {
+                              Toast.makeText(this, "Negatif kopya kaydedildi", Toast.LENGTH_SHORT).show()
+                          }
+                      } catch (e: Throwable) {
+                          runOnUiThread {
+                              Toast.makeText(this, "Negatif kopya kaydedilemedi: ${e.message}", Toast.LENGTH_LONG).show()
+                          }
+                      }
+                  }.start()
+              }
+
+              // ---------------------------------------------------------------- odak
+
               /** Ekranın ortasına otomatik netleme tetikler; 3 sn sonra sürekli otomatik odağa döner. */
               private fun focusCenter() {
                   val cam = camera ?: return
@@ -609,10 +773,11 @@ jobs:
               private fun takePhoto() {
                   val capture = imageCapture ?: return
                   val name = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
-                  val values = ContentValues().apply {
-                      put(MediaStore.MediaColumns.DISPLAY_NAME, "MAKRO_$name.jpg")
-                      put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                      put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/MakroKamera")
+                  val values = ContentValues()
+                  values.put(MediaStore.MediaColumns.DISPLAY_NAME, "MAKRO_$name.jpg")
+                  values.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                  if (Build.VERSION.SDK_INT >= 29) {
+                      values.put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/MakroKamera")
                   }
                   val options = ImageCapture.OutputFileOptions.Builder(
                       contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
@@ -622,6 +787,8 @@ jobs:
                       object : ImageCapture.OnImageSavedCallback {
                           override fun onImageSaved(r: ImageCapture.OutputFileResults) {
                               Toast.makeText(this@MainActivity, "Kaydedildi: Pictures/MakroKamera", Toast.LENGTH_SHORT).show()
+                              val saved = r.savedUri
+                              if (negative && saved != null) saveNegativeCopy(saved)
                           }
                           override fun onError(e: ImageCaptureException) {
                               Toast.makeText(this@MainActivity, "Hata: ${e.message}", Toast.LENGTH_LONG).show()
