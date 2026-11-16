@@ -647,4 +647,3 @@ jobs:
         with:
           name: MakroKamera-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-
