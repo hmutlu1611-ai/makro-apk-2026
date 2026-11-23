@@ -115,10 +115,11 @@ jobs:
                   android:theme="@android:style/Theme.Material.NoActionBar">
                   <activity
                       android:name=".UsbCameraActivity"
-                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"
                       android:exported="false" />
                   <activity
                       android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"
                       android:exported="true"
                       android:screenOrientation="portrait">
                       <intent-filter>
